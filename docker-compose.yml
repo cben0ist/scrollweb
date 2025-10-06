@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  scrollweb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scrollweb
+    restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scrollweb.rule=Host(`scrollweb.thatparkdalerv.ca`)"
+      - "traefik.http.routers.scrollweb.entrypoints=websecure"
+      - "traefik.http.routers.scrollweb.tls=true"
+      - "traefik.http.routers.scrollweb.tls.certresolver=letsencrypt"
+      - "traefik.http.services.scrollweb.loadbalancer.server.port=3000"
+      # Optional: HTTP to HTTPS redirect
+      - "traefik.http.routers.scrollweb-http.rule=Host(`scrollweb.thatparkdalerv.ca`)"
+      - "traefik.http.routers.scrollweb-http.entrypoints=web"
+      - "traefik.http.routers.scrollweb-http.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+    environment:
+      - NODE_ENV=production
+
+networks:
+  traefik:
+    external: true
