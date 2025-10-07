@@ -2,17 +2,38 @@
 
 This guide covers deploying the scrollweb application to your Hetzner server using Docker and Traefik.
 
+## Server Folder Structure
+
+- **Project code**: `/opt/data/scrollweb/` - Git repository with application code
+- **Docker stack**: `/opt/stacks/scrollweb/` - Docker Compose and configuration files
+
 ## Prerequisites
 
 - Hetzner server with Docker and Docker Compose installed
 - Traefik running with external network named `traefik`
-- SSH access to your server
+- SSH access to your server (with key-based authentication recommended)
 - DNS record pointing `scrollweb.thatparkdalerv.ca` to your Hetzner server IP
-- Git push access to `https://gitea.128l.org/sandbox/scrollweb.git`
+- `rsync` installed on your local machine (pre-installed on macOS/Linux)
 
 ## Initial Setup (One-time)
 
-### 1. Push your code to Gitea
+### 1. Prepare your Hetzner server
+
+SSH into your server and ensure Traefik network exists:
+
+```bash
+ssh root@your-hetzner-ip
+
+# Check if traefik network exists
+docker network ls | grep traefik
+
+# If not, create it (skip if already exists)
+docker network create traefik
+```
+
+### 2. Optional: Keep code in Gitea for version control
+
+While the server doesn't need Gitea access, you can still push to Gitea for version control:
 
 ```bash
 # Initialize git if not already done
@@ -27,23 +48,9 @@ git remote add origin https://gitea.128l.org/sandbox/scrollweb.git
 git push -u origin master
 ```
 
-### 2. Prepare your Hetzner server
-
-SSH into your server and ensure Traefik network exists:
-
-```bash
-ssh root@your-hetzner-ip
-
-# Check if traefik network exists
-docker network ls | grep traefik
-
-# If not, create it (skip if already exists)
-docker network create traefik
-```
-
 ## Deployment Methods
 
-### Method 1: Using the deploy script (Recommended for quick deploys)
+### Method 1: Using the deploy script (Recommended)
 
 ```bash
 # Edit deploy.sh and set your server details, or pass as argument
@@ -51,38 +58,78 @@ docker network create traefik
 ```
 
 This script will:
-- SSH into your server
-- Clone/pull the latest code from Gitea
-- Build the Docker image
+- Use **rsync** to sync your local files to server at `/opt/data/scrollweb/`
+- Automatically exclude `node_modules`, `.next`, `.git`, etc.
+- Create docker-compose.yml in `/opt/stacks/scrollweb/`
+- Build the Docker image on the server
 - Start the container with docker-compose
 - Show recent logs
 
-### Method 2: Manual deployment (More control)
+**Note**: rsync transfers only changed files, making updates fast and efficient!
 
-1. **SSH into your Hetzner server:**
+### Method 2: Manual deployment with rsync
+
+1. **Create directories on server:**
 
 ```bash
+ssh root@your-hetzner-ip "mkdir -p /opt/data/scrollweb /opt/stacks/scrollweb"
+```
+
+2. **Sync files from your local machine:**
+
+```bash
+rsync -avz --delete \
+  --exclude 'node_modules' \
+  --exclude '.next' \
+  --exclude '.git' \
+  --exclude '.claude' \
+  ./ root@your-hetzner-ip:/opt/data/scrollweb/
+```
+
+3. **Set up docker-compose on server:**
+
+```bash
+# SSH into server
 ssh root@your-hetzner-ip
-```
 
-2. **Clone the repository (first time only):**
+# Create docker-compose.yml in stack directory
+cat > /opt/stacks/scrollweb/docker-compose.yml << 'EOF'
+version: '3.8'
 
-```bash
-mkdir -p /opt/scrollweb
-cd /opt/scrollweb
-git clone https://gitea.128l.org/sandbox/scrollweb.git .
-```
+services:
+  scrollweb:
+    build:
+      context: /opt/data/scrollweb
+      dockerfile: Dockerfile
+    container_name: scrollweb
+    restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scrollweb.rule=Host(\`scrollweb.thatparkdalerv.ca\`)"
+      - "traefik.http.routers.scrollweb.entrypoints=websecure"
+      - "traefik.http.routers.scrollweb.tls=true"
+      - "traefik.http.routers.scrollweb.tls.certresolver=letsencrypt"
+      - "traefik.http.services.scrollweb.loadbalancer.server.port=3000"
+      - "traefik.http.routers.scrollweb-http.rule=Host(\`scrollweb.thatparkdalerv.ca\`)"
+      - "traefik.http.routers.scrollweb-http.entrypoints=web"
+      - "traefik.http.routers.scrollweb-http.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+    environment:
+      - NODE_ENV=production
 
-3. **Pull latest changes (subsequent deployments):**
-
-```bash
-cd /opt/scrollweb
-git pull origin master
+networks:
+  traefik:
+    external: true
+EOF
 ```
 
 4. **Build and start the container:**
 
 ```bash
+cd /opt/stacks/scrollweb
+
 # Stop existing container
 docker-compose down
 
@@ -96,6 +143,7 @@ docker-compose up -d
 5. **Check logs:**
 
 ```bash
+cd /opt/stacks/scrollweb
 docker-compose logs -f scrollweb
 ```
 
@@ -104,16 +152,16 @@ docker-compose logs -f scrollweb
 After making changes locally:
 
 ```bash
-# Commit your changes
+# Optional: Commit to Gitea for version control
 git add .
 git commit -m "Your update message"
-
-# Push to Gitea
 git push origin master
 
-# Deploy to server
+# Deploy to server (rsync + rebuild)
 ./deploy.sh root@your-hetzner-ip
 ```
+
+The deploy script uses rsync which only transfers changed files, making updates very fast!
 
 ## Troubleshooting
 
@@ -124,12 +172,17 @@ ssh root@your-hetzner-ip 'docker ps | grep scrollweb'
 
 ### View logs:
 ```bash
-ssh root@your-hetzner-ip 'cd /opt/scrollweb && docker-compose logs -f'
+ssh root@your-hetzner-ip 'cd /opt/stacks/scrollweb && docker-compose logs -f'
 ```
 
 ### Rebuild from scratch:
 ```bash
-ssh root@your-hetzner-ip 'cd /opt/scrollweb && docker-compose down && docker-compose build --no-cache && docker-compose up -d'
+ssh root@your-hetzner-ip 'cd /opt/stacks/scrollweb && docker-compose down && docker-compose build --no-cache && docker-compose up -d'
+```
+
+### Sync files without rebuilding:
+```bash
+rsync -avz --delete --exclude 'node_modules' --exclude '.next' --exclude '.git' ./ root@your-hetzner-ip:/opt/data/scrollweb/
 ```
 
 ### Check Traefik dashboard:
@@ -169,17 +222,43 @@ The `docker-compose.yml` includes:
 ./deploy.sh root@your-hetzner-ip
 
 # View logs
-ssh root@your-hetzner-ip 'cd /opt/scrollweb && docker-compose logs -f'
+ssh root@your-hetzner-ip 'cd /opt/stacks/scrollweb && docker-compose logs -f'
 
 # Restart
-ssh root@your-hetzner-ip 'cd /opt/scrollweb && docker-compose restart'
+ssh root@your-hetzner-ip 'cd /opt/stacks/scrollweb && docker-compose restart'
 
 # Stop
-ssh root@your-hetzner-ip 'cd /opt/scrollweb && docker-compose down'
+ssh root@your-hetzner-ip 'cd /opt/stacks/scrollweb && docker-compose down'
 
 # Rebuild
-ssh root@your-hetzner-ip 'cd /opt/scrollweb && docker-compose down && docker-compose build --no-cache && docker-compose up -d'
+ssh root@your-hetzner-ip 'cd /opt/stacks/scrollweb && docker-compose down && docker-compose build --no-cache && docker-compose up -d'
+
+# Sync files only (no rebuild)
+rsync -avz --delete --exclude 'node_modules' --exclude '.next' --exclude '.git' ./ root@your-hetzner-ip:/opt/data/scrollweb/
 ```
+
+## Folder Structure on Server
+
+```
+/opt/
+├── data/
+│   └── scrollweb/          # Project code (synced via rsync)
+│       ├── app/
+│       ├── Dockerfile
+│       ├── package.json
+│       └── ...
+└── stacks/
+    └── scrollweb/          # Docker Compose (stack)
+        └── docker-compose.yml
+```
+
+## How rsync Works
+
+The deployment uses `rsync` to efficiently sync files:
+- **First deploy**: Copies all files to server
+- **Updates**: Only transfers changed files (much faster!)
+- **Auto-excludes**: Skips `node_modules`, `.next`, `.git` automatically
+- **Delete flag**: Removes files on server that don't exist locally (keeps it clean)
 
 ## Next Steps: CI/CD
 
