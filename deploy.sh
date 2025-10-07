@@ -57,8 +57,6 @@ echo -e "${GREEN}✅ Project files verified at ${PROJECT_PATH}${NC}"
 
 # Copy docker-compose to stack directory and update context path
 cat > ${STACK_PATH}/docker-compose.yml << 'COMPOSE_EOF'
-version: '3.8'
-
 services:
   scrollweb:
     build:
